@@ -28,7 +28,7 @@ app.get('/api/search', async (req, res) => {
 
     res.json({ results });
   } catch (e) {
-    res.status(500).json({ error: 'Search failed' });
+    res.status(500).json({ error: 'Search failed', details: e.message });
   }
 });
 
@@ -36,24 +36,29 @@ app.get('/api/stream', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Missing query' });
 
+  console.log('Stream request for:', q);
+
   const args = [
     'ytsearch1:' + q,
     '--get-url',
-    '--extract-audio',
     '--no-playlist',
     '--no-warnings',
     '--socket-timeout', '15',
   ];
 
-  execFile('yt-dlp', args, { timeout: 30000 }, (error, stdout, stderr) => {
+  execFile('yt-dlp', args, { timeout: 60000 }, (error, stdout, stderr) => {
     if (error) {
       console.error('yt-dlp error:', stderr || error.message);
-      return res.status(500).json({ error: 'Failed to get stream' });
+      return res.status(500).json({ error: 'Failed to get stream', details: stderr || error.message });
     }
 
+    console.log('yt-dlp output length:', stdout.length);
+
     const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
+    console.log('Found URLs:', urls.length);
+
     if (urls.length === 0) {
-      return res.status(500).json({ error: 'No URL found' });
+      return res.status(500).json({ error: 'No URL found', stdout: stdout.substring(0, 200) });
     }
 
     res.json({ url: urls[0] });
