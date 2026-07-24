@@ -14,9 +14,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY server/package*.json ./
+COPY ./server/ ./
 RUN npm install --omit=dev
-COPY server/ .
 
 EXPOSE $PORT
 
