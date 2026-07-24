@@ -6,10 +6,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const INNERTUBE = 'https://music.youtube.com/youtubei/v1';
-
-async function ytSearch(query) {
-  const res = await fetch(`${INNERTUBE}/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30`, {
+async function ytSearchVideoId(query) {
+  const res = await fetch('https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -18,63 +16,33 @@ async function ytSearch(query) {
     body: JSON.stringify({
       context: {
         client: {
-          clientName: 'WEB_REMIX',
-          clientVersion: '1.20241125.01.00',
+          clientName: 'WEB',
+          clientVersion: '2.20241126.01.00',
           hl: 'es',
           gl: 'ES',
         },
       },
       query,
-      params: 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D',
     }),
   });
 
   const data = await res.json();
-  const sections = data.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
+  const contents = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
 
-  if (!sections) {
-    const shelf = data.contents?.sectionListRenderer?.contents;
-    if (!shelf) return [];
+  if (!contents) return null;
 
-    const videos = [];
-    for (const section of shelf) {
-      const items = section.musicShelfRenderer?.contents || [];
-      for (const item of items) {
-        const vid = item.musicResponsiveListItemRenderer;
-        if (vid) {
-          const videoId = vid.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
-          const title = vid.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-          if (videoId && title) {
-            videos.push({ id: videoId, title });
-          }
-        }
-      }
-    }
-    return videos;
-  }
-
-  const videos = [];
-  for (const section of sections) {
-    const items = section.musicShelfRenderer?.contents || [];
-    for (const item of items) {
-      const vid = item.musicResponsiveListItemRenderer;
-      if (vid) {
-        const videoId = vid.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
-        const title = vid.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-        if (videoId && title) {
-          videos.push({ id: videoId, title });
-        }
-      }
+  for (const item of contents) {
+    if (item.videoRenderer?.videoId) {
+      return item.videoRenderer.videoId;
     }
   }
-  return videos;
+  return null;
 }
 
 function ytdlpGetUrl(videoId) {
   return new Promise((resolve, reject) => {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
     execFile('yt-dlp', [
-      url,
+      `https://www.youtube.com/watch?v=${videoId}`,
       '--get-url',
       '--no-playlist',
       '--no-warnings',
@@ -122,16 +90,16 @@ app.get('/api/stream', async (req, res) => {
   if (!q) return res.status(400).json({ error: 'Missing query' });
 
   try {
-    console.log('Searching:', q);
-    const videos = await ytSearch(q);
+    console.log('Searching YouTube for:', q);
+    const videoId = await ytSearchVideoId(q);
 
-    if (videos.length === 0) {
-      return res.status(404).json({ error: 'No videos found' });
+    if (!videoId) {
+      return res.status(404).json({ error: 'No video found' });
     }
 
-    console.log('Found:', videos[0].title, videos[0].id);
+    console.log('Found video:', videoId);
 
-    const url = await ytdlpGetUrl(videos[0].id);
+    const url = await ytdlpGetUrl(videoId);
 
     if (!url) {
       return res.status(404).json({ error: 'No audio stream found' });
