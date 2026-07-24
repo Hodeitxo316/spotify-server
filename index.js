@@ -1,20 +1,16 @@
 const express = require('express');
 const cors = require('cors');
+const { execFile } = require('child_process');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-const YT_CLIENT = {
-  clientName: 'WEB',
-  clientVersion: '2.20240101.00.00',
-  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-};
-
 const INNERTUBE = 'https://www.youtube.com/youtubei/v1';
+const YT_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 
 async function ytSearch(query) {
-  const res = await fetch(`${INNERTUBE}/search?key=${YT_CLIENT.apiKey}`, {
+  const res = await fetch(`${INNERTUBE}/search?key=${YT_KEY}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -23,8 +19,10 @@ async function ytSearch(query) {
     body: JSON.stringify({
       context: {
         client: {
-          clientName: YT_CLIENT.clientName,
-          clientVersion: YT_CLIENT.clientVersion,
+          clientName: 'WEB',
+          clientVersion: '2.20241126.01.00',
+          hl: 'es',
+          gl: 'ES',
         },
       },
       query,
@@ -39,45 +37,31 @@ async function ytSearch(query) {
   const videos = [];
   for (const item of contents) {
     const vid = item.videoRenderer;
-    if (vid) {
+    if (vid?.videoId) {
       videos.push({
         id: vid.videoId,
         title: vid.title?.runs?.[0]?.text || '',
-        channel: vid.ownerText?.runs?.[0]?.text || '',
       });
     }
   }
   return videos;
 }
 
-async function ytGetStreamUrl(videoId) {
-  const res = await fetch(`${INNERTUBE}/player?key=${YT_CLIENT.apiKey}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'com.google.android.youtube/19.02.39 (Linux; U; Android 14)',
-    },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: 'ANDROID_VR',
-          clientVersion: '1.60.19',
-          androidSdkVersion: 34,
-        },
-      },
-      videoId,
-    }),
+function ytdlpGetUrl(videoId) {
+  return new Promise((resolve, reject) => {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    execFile('yt-dlp', [url, '--get-url', '--no-playlist', '--no-warnings', '--socket-timeout', '15'],
+      { timeout: 30000 },
+      (error, stdout, stderr) => {
+        if (error) {
+          console.error('yt-dlp error:', stderr || error.message);
+          return reject(new Error(stderr || error.message));
+        }
+        const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
+        resolve(urls.length > 0 ? urls[0] : null);
+      }
+    );
   });
-
-  const data = await res.json();
-  const formats = data.streamingData?.adaptiveFormats || [];
-
-  const audioStreams = formats
-    .filter(f => f.mimeType?.startsWith('audio/'))
-    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-
-  if (audioStreams.length === 0) return null;
-  return audioStreams[0].url;
 }
 
 app.get('/', (req, res) => {
@@ -111,15 +95,16 @@ app.get('/api/stream', async (req, res) => {
   if (!q) return res.status(400).json({ error: 'Missing query' });
 
   try {
-    console.log('Searching YouTube for:', q);
+    console.log('Searching:', q);
     const videos = await ytSearch(q);
 
     if (videos.length === 0) {
       return res.status(404).json({ error: 'No videos found' });
     }
 
-    console.log('Found video:', videos[0].title, videos[0].id);
-    const url = await ytGetStreamUrl(videos[0].id);
+    console.log('Found:', videos[0].title, videos[0].id);
+
+    const url = await ytdlpGetUrl(videos[0].id);
 
     if (!url) {
       return res.status(404).json({ error: 'No audio stream found' });
