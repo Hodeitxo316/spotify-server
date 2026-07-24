@@ -6,11 +6,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const INNERTUBE = 'https://www.youtube.com/youtubei/v1';
-const YT_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE = 'https://music.youtube.com/youtubei/v1';
 
 async function ytSearch(query) {
-  const res = await fetch(`${INNERTUBE}/search?key=${YT_KEY}`, {
+  const res = await fetch(`${INNERTUBE}/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -19,29 +18,53 @@ async function ytSearch(query) {
     body: JSON.stringify({
       context: {
         client: {
-          clientName: 'WEB',
-          clientVersion: '2.20241126.01.00',
+          clientName: 'WEB_REMIX',
+          clientVersion: '1.20241125.01.00',
           hl: 'es',
           gl: 'ES',
         },
       },
       query,
+      params: 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D',
     }),
   });
 
   const data = await res.json();
-  const contents = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
+  const sections = data.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
 
-  if (!contents) return [];
+  if (!sections) {
+    const shelf = data.contents?.sectionListRenderer?.contents;
+    if (!shelf) return [];
+
+    const videos = [];
+    for (const section of shelf) {
+      const items = section.musicShelfRenderer?.contents || [];
+      for (const item of items) {
+        const vid = item.musicResponsiveListItemRenderer;
+        if (vid) {
+          const videoId = vid.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+          const title = vid.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+          if (videoId && title) {
+            videos.push({ id: videoId, title });
+          }
+        }
+      }
+    }
+    return videos;
+  }
 
   const videos = [];
-  for (const item of contents) {
-    const vid = item.videoRenderer;
-    if (vid?.videoId) {
-      videos.push({
-        id: vid.videoId,
-        title: vid.title?.runs?.[0]?.text || '',
-      });
+  for (const section of sections) {
+    const items = section.musicShelfRenderer?.contents || [];
+    for (const item of items) {
+      const vid = item.musicResponsiveListItemRenderer;
+      if (vid) {
+        const videoId = vid.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+        const title = vid.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+        if (videoId && title) {
+          videos.push({ id: videoId, title });
+        }
+      }
     }
   }
   return videos;
@@ -50,17 +73,21 @@ async function ytSearch(query) {
 function ytdlpGetUrl(videoId) {
   return new Promise((resolve, reject) => {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
-    execFile('yt-dlp', [url, '--get-url', '--no-playlist', '--no-warnings', '--socket-timeout', '15'],
-      { timeout: 30000 },
-      (error, stdout, stderr) => {
-        if (error) {
-          console.error('yt-dlp error:', stderr || error.message);
-          return reject(new Error(stderr || error.message));
-        }
-        const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
-        resolve(urls.length > 0 ? urls[0] : null);
+    execFile('yt-dlp', [
+      url,
+      '--get-url',
+      '--no-playlist',
+      '--no-warnings',
+      '--socket-timeout', '15',
+      '--extractor-args', 'youtube:player_client=tv_embedded',
+    ], { timeout: 30000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('yt-dlp error:', stderr || error.message);
+        return reject(new Error(stderr || error.message));
       }
-    );
+      const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
+      resolve(urls.length > 0 ? urls[0] : null);
+    });
   });
 }
 
