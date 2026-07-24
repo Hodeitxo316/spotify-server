@@ -1,63 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-
-async function ytSearchVideoId(query) {
-  const res = await fetch('https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: 'WEB',
-          clientVersion: '2.20241126.01.00',
-          hl: 'es',
-          gl: 'ES',
-        },
-      },
-      query,
-    }),
-  });
-
-  const data = await res.json();
-  const contents = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
-
-  if (!contents) return null;
-
-  for (const item of contents) {
-    if (item.videoRenderer?.videoId) {
-      return item.videoRenderer.videoId;
-    }
-  }
-  return null;
-}
-
-function ytdlpGetUrl(videoId) {
-  return new Promise((resolve, reject) => {
-    execFile('yt-dlp', [
-      `https://www.youtube.com/watch?v=${videoId}`,
-      '--get-url',
-      '--no-playlist',
-      '--no-warnings',
-      '--socket-timeout', '15',
-      '--extractor-args', 'youtube:player_client=tv_embedded',
-    ], { timeout: 30000 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('yt-dlp error:', stderr || error.message);
-        return reject(new Error(stderr || error.message));
-      }
-      const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
-      resolve(urls.length > 0 ? urls[0] : null);
-    });
-  });
-}
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok' });
@@ -85,32 +32,95 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-app.get('/api/stream', async (req, res) => {
+app.get('/api/stream-url', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Missing query' });
 
-  try {
-    console.log('Searching YouTube for:', q);
-    const videoId = await ytSearchVideoId(q);
+  console.log('Stream URL request:', q);
 
-    if (!videoId) {
-      return res.status(404).json({ error: 'No video found' });
+  const args = [
+    `ytsearch1:${q}`,
+    '--get-url',
+    '--no-playlist',
+    '--no-warnings',
+    '--socket-timeout', '15',
+    '--extractor-args', 'youtube:player_client=tv_embedded',
+  ];
+
+  execFile('yt-dlp', args, { timeout: 30000 }, (error, stdout, stderr) => {
+    if (error) {
+      console.error('yt-dlp error:', stderr || error.message);
+      return res.status(500).json({ error: 'Failed', details: stderr || error.message });
     }
 
-    console.log('Found video:', videoId);
-
-    const url = await ytdlpGetUrl(videoId);
-
-    if (!url) {
-      return res.status(404).json({ error: 'No audio stream found' });
+    const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
+    if (urls.length === 0) {
+      return res.status(404).json({ error: 'No URL found' });
     }
 
-    console.log('Got stream URL');
-    res.json({ url });
-  } catch (e) {
-    console.error('Stream error:', e.message);
-    res.status(500).json({ error: 'Failed to get stream', details: e.message });
-  }
+    console.log('Got URL');
+    res.json({ url: urls[0] });
+  });
+});
+
+app.get('/api/proxy-audio', (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'Missing query' });
+
+  console.log('Proxy audio request:', q);
+
+  const ytDlp = spawn('yt-dlp', [
+    `ytsearch1:${q}`,
+    '-f', 'bestaudio/best',
+    '--no-playlist',
+    '--no-warnings',
+    '--socket-timeout', '15',
+    '--extractor-args', 'youtube:player_client=tv_embedded',
+    '-o', '-',
+  ]);
+
+  let started = false;
+
+  ytDlp.stdout.on('data', (chunk) => {
+    if (!started) {
+      started = true;
+      res.set({
+        'Content-Type': 'audio/webm',
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-cache',
+      });
+    }
+    res.write(chunk);
+  });
+
+  ytDlp.stderr.on('data', (data) => {
+    console.log('yt-dlp stderr:', data.toString().trim());
+  });
+
+  ytDlp.on('close', (code) => {
+    console.log('yt-dlp closed with code:', code);
+    if (!started) {
+      if (code !== 0) {
+        return res.status(500).json({ error: 'yt-dlp failed' });
+      }
+    }
+    res.end();
+  });
+
+  ytDlp.on('error', (err) => {
+    console.error('yt-dlp spawn error:', err.message);
+    if (!started) {
+      res.status(500).json({ error: 'Failed to start yt-dlp' });
+    } else {
+      res.end();
+    }
+  });
+
+  req.on('close', () => {
+    if (!ytDlp.killed) {
+      ytDlp.kill();
+    }
+  });
 });
 
 const PORT = process.env.PORT || 3000;
